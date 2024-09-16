@@ -6,10 +6,13 @@ import { HumanMessage, SystemMessage, AIMessage } from '@langchain/core/messages
 const router = express.Router();
 const prisma = new PrismaClient();
 
+// Hardcoded streaming flag
+const ENABLE_STREAMING = true;
 
 // AI chat route with conversation history
 router.post('/', async (req: Request, res: Response) => {
     const { input, conversationId, model } = req.body;
+    console.log(req.body);
 
     let { conversation, conversationIdToUse } = await getOrCreateConversation(conversationId);
 
@@ -19,10 +22,9 @@ router.post('/', async (req: Request, res: Response) => {
 
     const chatModel = new ChatOpenAI({
         model: model || "gpt-3.5-turbo",
-        temperature: 0
+        temperature: 0,
+        streaming: ENABLE_STREAMING
     });
-
-    console.log(chatModel);
 
     const messages = [
         new SystemMessage("You are a helpful assistant."),
@@ -32,30 +34,52 @@ router.post('/', async (req: Request, res: Response) => {
         new HumanMessage(input),
     ];
 
-    const result = await chatModel.invoke(messages);
+    if (ENABLE_STREAMING) {
+        res.writeHead(200, {
+            'Content-Type': 'text/event-stream',
+            'Cache-Control': 'no-cache',
+            'Connection': 'keep-alive'
+        });
 
-    // Save the new messages
-    await prisma.message.createMany({
-        data: [
-            { content: input, role: 'human', conversationId: conversationIdToUse },
-            { content: result.content, role: 'ai', conversationId: conversationIdToUse },
-        ],
-    });
+        let fullResponse = '';
+        const stream = await chatModel.stream(messages);
 
-    res.json({ text: result.content, conversationId: conversationIdToUse });
+        for await (const chunk of stream) {
+            fullResponse += chunk.content;
+            res.write(`data: ${JSON.stringify({ type: 'message', content: chunk.content })}\n\n`);
+        }
+
+        // Save the full response after streaming is complete
+        await saveMessages(input, fullResponse, conversationIdToUse);
+
+        res.write(`data: ${JSON.stringify({ type: 'end', conversationId: conversationIdToUse })}\n\n`);
+        res.end();
+    } else {
+        const result = await chatModel.invoke(messages);
+        const responseContent = typeof result.content === 'string' ? result.content : JSON.stringify(result.content);
+        await saveMessages(input, responseContent, conversationIdToUse);
+        res.json({ text: responseContent, conversationId: conversationIdToUse });
+    }
 });
 
-async function getOrCreateConversation(conversationId: any) {
-    let conversationIdToUse = conversationId;
+async function saveMessages(input: string, aiResponse: string, conversationId: string) {
+    await prisma.message.createMany({
+        data: [
+            { content: input, role: 'human', conversationId: conversationId },
+            { content: aiResponse, role: 'ai', conversationId: conversationId },
+        ],
+    });
+}
+
+async function getOrCreateConversation(conversationId: string | null) {
+    let conversationIdToUse = conversationId || generateNewConversationId();
     let conversation;
 
     if (!conversationId) {
-        // Generate a new ID and create a new conversation
-        conversationIdToUse = generateNewConversationId();
         conversation = await prisma.conversation.create({
             data: {
                 id: conversationIdToUse,
-                name: 'New Conversation', // You can customize this default name
+                name: 'New Conversation',
             },
             include: { messages: true },
         });
@@ -76,11 +100,10 @@ async function getOrCreateConversation(conversationId: any) {
 }
 
 // Function to generate a new conversation ID
-function generateNewConversationId() {
+function generateNewConversationId() : string {
     // Generate a random UUID using the crypto module
     const crypto = require('crypto');
     return crypto.randomUUID();
 }
-
 
 export default router;

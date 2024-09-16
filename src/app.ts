@@ -9,13 +9,12 @@ const app = express();
 const prisma = new PrismaClient();
 const port = process.env.PORT || 3000;
 
-
 dotenv.config();
 
 app.use(cors({
-  origin: 'http://localhost:1420', // Allow requests from your frontend
-  methods: ['GET', 'POST'], // Allow specific HTTP methods
-  allowedHeaders: ['Content-Type', 'Authorization'] // Allow specific headers
+  origin: 'http://localhost:1420', // Adjust as necessary
+  methods: ['GET', 'POST'],
+  allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
 app.use(express.json());
