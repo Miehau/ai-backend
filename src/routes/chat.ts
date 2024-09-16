@@ -9,7 +9,7 @@ const prisma = new PrismaClient();
 
 // AI chat route with conversation history
 router.post('/', async (req: Request, res: Response) => {
-    const { input, conversationId } = req.body;
+    const { input, conversationId, model } = req.body;
 
     let { conversation, conversationIdToUse } = await getOrCreateConversation(conversationId);
 
@@ -17,10 +17,12 @@ router.post('/', async (req: Request, res: Response) => {
         return res.status(404).json({ error: 'Conversation not found' });
     }
 
-    const model = new ChatOpenAI({
-        model: "gpt-3.5-turbo",
+    const chatModel = new ChatOpenAI({
+        model: model || "gpt-3.5-turbo",
         temperature: 0
     });
+
+    console.log(chatModel);
 
     const messages = [
         new SystemMessage("You are a helpful assistant."),
@@ -30,7 +32,7 @@ router.post('/', async (req: Request, res: Response) => {
         new HumanMessage(input),
     ];
 
-    const result = await model.invoke(messages);
+    const result = await chatModel.invoke(messages);
 
     // Save the new messages
     await prisma.message.createMany({
