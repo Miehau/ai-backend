@@ -5,6 +5,8 @@ import conversationsRouter from './routes/conversations';
 import chatRouter from './routes/chat';
 import errorHandler from './middleware/errorHandler';
 import dotenv from 'dotenv';
+import recipeRoutes from './routes/recipes';
+
 const app = express();
 const prisma = new PrismaClient();
 const port = process.env.PORT || 3000;
@@ -21,6 +23,7 @@ app.use(express.json());
 
 app.use('/api/conversations', conversationsRouter);
 app.use('/api/chat', chatRouter);
+app.use('/api/recipes', recipeRoutes);
 
 app.use(errorHandler);
 

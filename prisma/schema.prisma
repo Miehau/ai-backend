@@ -23,3 +23,46 @@ model Message {
   conversation   Conversation @relation(fields: [conversationId], references: [id])
   createdAt      DateTime     @default(now())
 }
+
+model Recipe {
+  id          String   @id @default(uuid())
+  title       String
+  image       Bytes? 
+  source      String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  ingredients Ingredient[]
+  methodSteps MethodStep[]
+  tags        RecipeTag[]
+}
+
+model Ingredient {
+  id       String @id @default(uuid())
+  recipeId String
+  name     String
+  amount   String?  
+  recipe   Recipe @relation(fields: [recipeId], references: [id])
+}
+
+model MethodStep {
+  id          String @id @default(uuid())
+  recipeId    String
+  stepNumber  Int
+  description String
+  recipe      Recipe @relation(fields: [recipeId], references: [id])
+}
+
+model Tag {
+  id        String      @id @default(uuid())
+  name      String      @unique
+  recipes   RecipeTag[]
+}
+
+model RecipeTag {
+  recipeId String
+  tagId    String
+  recipe   Recipe @relation(fields: [recipeId], references: [id])
+  tag      Tag    @relation(fields: [tagId], references: [id])
+
+  @@id([recipeId, tagId])
+}
