@@ -1,47 +1,71 @@
 import express from 'express';
-import { PrismaClient } from '@prisma/client';
 import multer from 'multer';
 import { scrapeRecipe } from '../utils/recipeScraper';
 import { extractRecipeFromImage } from '../utils/recipeExtractor';
+import { db } from '../app'; // Import the CouchDB instance
 
-// Add these interfaces
+// Define types
 interface Ingredient {
   name: string;
   amount: string;
+}
+
+interface MethodStep {
+  stepNumber: number;
+  description: string;
 }
 
 interface Tag {
   name: string;
 }
 
+interface Recipe {
+  _id?: string;
+  _rev?: string;
+  title: string;
+  image?: Buffer;
+  source?: string;
+  ingredients: Ingredient[];
+  methodSteps: MethodStep[];
+  tags: Tag[];
+  type: 'recipe';
+}
+
 const router = express.Router();
-const prisma = new PrismaClient();
 const upload = multer();
 
 // Get all recipes
 router.get('/', async (req, res) => {
-  const recipes = await prisma.recipe.findMany({
-    include: { ingredients: true, methodSteps: true, tags: { include: { tag: true } } },
-  });
-  res.json(recipes.map(recipe => ({
-    ...recipe,
-    image: recipe.image ? `${recipe.image.toString('base64')}` : null
-  })));
+  try {
+    const { rows } = await db.view<Recipe>('recipes', 'all');
+    const recipes = rows.map(row => ({
+      ...row.value,
+      image: row.value.image ? `${Buffer.from(row.value.image).toString('base64')}` : null
+    }));
+    res.json(recipes);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Failed to fetch recipes' });
+  }
 });
 
 // Get a specific recipe
 router.get('/:id', async (req, res) => {
-  const { id } = req.params;
-  const recipe = await prisma.recipe.findUnique({
-    where: { id },
-    include: { ingredients: true, methodSteps: true, tags: { include: { tag: true } } },
-  });
-  if (recipe) {
-    res.json({
-      ...recipe,
-      image: recipe.image ? `${recipe.image.toString('base64')}` : null
-    });
-  } else {
+  try {
+    const { id } = req.params;
+    const recipe = await db.get(id);
+    if (recipe) {
+      if ('image' in recipe && recipe.image instanceof Buffer) {
+        res.json({
+          ...recipe,
+          image: recipe.image.toString('base64')
+        });
+      } else {
+        res.json(recipe);
+      }
+    }
+  } catch (error) {
+    console.error(error);
     res.status(404).json({ error: 'Recipe not found' });
   }
 });
@@ -78,9 +102,9 @@ router.post('/', upload.single('image'), async (req, res) => {
     const recipe = await saveRecipeToDatabase(title, ingredients, methodSteps, tags, imageBuffer, source);
 
     res.status(201).json({
-        ...recipe,
-        image: recipe.image ? `${recipe.image.toString('base64')}` : null
-      });
+      ...recipe,
+      image: recipe.image ? `${Buffer.from(recipe.image).toString('base64')}` : null
+    });
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: 'Failed to create recipe' });
@@ -102,45 +126,34 @@ router.put('/:id', upload.single('image'), async (req, res) => {
       imageBuffer = Buffer.from(image, 'base64');
     }
 
-    const recipe = await prisma.recipe.update({
-      where: { id },
-      data: {
-        title,
-        image: imageBuffer,
-        source,
-        ingredients: {
-          deleteMany: {},
-          create: (ingredients as Ingredient[]).map(ing => ({
-            name: ing.name,
-            amount: ing.amount
-          })),
-        },
-        methodSteps: {
-          deleteMany: {},
-          create: (methodSteps as string[]).map((step, index) => ({
-            stepNumber: index + 1,
-            description: step,
-          })),
-        },
-        tags: {
-          deleteMany: {},
-          create: (tags as Tag[]).map(tag => ({
-            tag: {
-              connectOrCreate: {
-                where: { name: tag.name },
-                create: { name: tag.name },
-              },
-            },
-          })),
-        },
-      },
-      include: { ingredients: true, methodSteps: true, tags: { include: { tag: true } } },
-    });
+    const existingRecipe = await db.get(id);
+    const updatedRecipe = {
+      ...existingRecipe,
+      title,
+      image: imageBuffer,
+      source,
+      ingredients: ingredients.map((ing: Ingredient) => ({
+        name: ing.name,
+        amount: ing.amount
+      })),
+      methodSteps: methodSteps.map((step: string, index: number) => ({
+        stepNumber: index + 1,
+        description: step,
+      })),
+      tags: tags.map((tag: Tag) => ({
+        name: tag.name,
+      })),
+    };
 
-    res.json({
-        ...recipe,
-        image: recipe.image ? `${recipe.image.toString('base64')}` : null
+    const response = await db.insert(updatedRecipe);
+    if (response.ok) {
+      res.json({
+        ...updatedRecipe,
+        image: updatedRecipe.image ? `${Buffer.from(updatedRecipe.image).toString('base64')}` : null
       });
+    } else {
+      throw new Error('Failed to update recipe');
+    }
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: 'Failed to update recipe' });
@@ -149,40 +162,45 @@ router.put('/:id', upload.single('image'), async (req, res) => {
 
 // Delete a recipe
 router.delete('/:id', async (req, res) => {
-  const { id } = req.params;
-  await prisma.recipe.delete({ where: { id } });
-  res.status(204).end();
+  try {
+    const { id } = req.params;
+    const recipe = await db.get(id);
+    await db.destroy(id, recipe._rev);
+    res.status(204).end();
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Failed to delete recipe' });
+  }
 });
 
 export default router;
 
-function saveRecipeToDatabase(title: string, ingredients: Ingredient[], methodSteps: string[], tags: Tag[], imageBuffer: Buffer | undefined, source: string | undefined) {
-    console.log('Saving recipe to database:', title, ingredients, methodSteps, tags, imageBuffer, source);
-  return prisma.recipe.create({
-    data: {
-      title,
-      image: imageBuffer, // Keep it as Buffer
-      source,
-      ingredients: {
-        create: ingredients.map(ing => ({
-          name: ing.name,
-          amount: ing.amount
-        })),
-      },
-      methodSteps: {
-        create: methodSteps.map((step, index) => ({
-          stepNumber: index + 1,
-          description: step,
-        })),
-      },
-      tags: {
-        create: tags.map(tag => ({
-            tag: {
-              create: { name: tag.name },
-            },
-          })),
-      },
-    },
-    include: { ingredients: true, methodSteps: true, tags: { include: { tag: true } } },
-  });
+async function saveRecipeToDatabase(
+  title: string,
+  ingredients: Ingredient[],
+  methodSteps: string[],
+  tags: Tag[],
+  imageBuffer: Buffer | undefined,
+  source: string | undefined
+): Promise<Recipe> {
+  console.log('Saving recipe to database:', title, ingredients, methodSteps, tags, imageBuffer, source);
+  const recipe: Recipe = {
+    title,
+    image: imageBuffer,
+    source,
+    ingredients,
+    methodSteps: methodSteps.map((step, index) => ({
+      stepNumber: index + 1,
+      description: step,
+    })),
+    tags,
+    type: 'recipe',
+  };
+
+  const response = await db.insert(recipe);
+  if (response.ok) {
+    return { ...recipe, _id: response.id, _rev: response.rev };
+  } else {
+    throw new Error('Failed to save recipe');
+  }
 }
