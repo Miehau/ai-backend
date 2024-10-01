@@ -3,6 +3,7 @@ import multer from 'multer';
 import { scrapeRecipe } from '../utils/recipeScraper';
 import { extractRecipeFromImage } from '../utils/recipeExtractor';
 import { db } from '../app'; // Import the CouchDB instance
+import { DocumentResponseRow } from 'nano';
 
 // Define types
 interface Ingredient {
@@ -37,11 +38,23 @@ const upload = multer();
 // Get all recipes
 router.get('/', async (req, res) => {
   try {
-    const { rows } = await db.view<Recipe>('recipes', 'all');
-    const recipes = rows.map(row => ({
-      ...row.value,
-      image: row.value.image ? `${Buffer.from(row.value.image).toString('base64')}` : null
-    }));
+    const { rows } = await db.list({ include_docs: true });
+    const recipes = rows
+      .filter((row): row is DocumentResponseRow<Recipe> => 
+        row.doc !== null && 
+        typeof row.doc === 'object' && 
+        'type' in row.doc && 
+        row.doc.type === 'recipe'
+      )
+      .map(row => {
+        const recipe = row.doc;
+        return {
+          ...recipe,
+          image: recipe!!.image
+            ? `data:image/jpeg;base64,${Buffer.from(recipe!!.image).toString('base64')}`
+            : null
+        };
+      });
     res.json(recipes);
   } catch (error) {
     console.error(error);
@@ -74,14 +87,14 @@ router.get('/:id', async (req, res) => {
 router.post('/', upload.single('image'), async (req, res) => {
   try {
     let { title, ingredients, methodSteps, tags, source, image } = req.body;
-
+    console.log(req.body);
     // Handle image upload
     let imageBuffer: Buffer | undefined;
     if (req.file) {
       imageBuffer = req.file.buffer;
     } else if (image) {
       // Assume image is base64 encoded
-      imageBuffer = Buffer.from(image, 'base64');
+      imageBuffer = Buffer.from(image.split(',')[1], 'base64');
     }
 
     // Handle URL-based scraping
@@ -97,13 +110,19 @@ router.post('/', upload.single('image'), async (req, res) => {
       methodSteps = extractedRecipe.methodSteps;
       tags = tags || []; 
     }
+    // Handle manually added recipe
+    else {
+      ingredients = ingredients;
+      methodSteps = methodSteps;
+      tags = tags;
+    }
 
     // Create recipe in database
     const recipe = await saveRecipeToDatabase(title, ingredients, methodSteps, tags, imageBuffer, source);
 
     res.status(201).json({
       ...recipe,
-      image: recipe.image ? `${Buffer.from(recipe.image).toString('base64')}` : null
+      image: recipe.image ? `data:image/jpeg;base64,${Buffer.from(recipe.image).toString('base64')}` : null
     });
   } catch (error) {
     console.error(error);
@@ -178,7 +197,7 @@ export default router;
 async function saveRecipeToDatabase(
   title: string,
   ingredients: Ingredient[],
-  methodSteps: string[],
+  methodSteps: MethodStep[],
   tags: Tag[],
   imageBuffer: Buffer | undefined,
   source: string | undefined
@@ -189,10 +208,7 @@ async function saveRecipeToDatabase(
     image: imageBuffer,
     source,
     ingredients,
-    methodSteps: methodSteps.map((step, index) => ({
-      stepNumber: index + 1,
-      description: step,
-    })),
+    methodSteps: methodSteps,
     tags,
     type: 'recipe',
   };

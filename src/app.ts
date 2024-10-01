@@ -12,12 +12,9 @@ const app = express();
 const prisma = new PrismaClient();
 const port = process.env.PORT || 3000;
 
-const couchDbUrl = process.env.COUCHDB_URL || 'http://localhost:5984';
 const couchDbUsername = process.env.COUCHDB_USERNAME;
 const couchDbPassword = process.env.COUCHDB_PASSWORD;
-console.log(couchDbUsername, couchDbPassword);
 const dbAuthenticatedUrl = `http://${couchDbUsername}:${couchDbPassword}@localhost:5984`;
-console.log(dbAuthenticatedUrl);
 
 
 dotenv.config();
